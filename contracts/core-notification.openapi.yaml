@@ -1,0 +1,407 @@
+openapi: 3.1.0
+info:
+  title: Smart Campus — Lab 02 (Pair 04 - Core Notification)
+  version: 1.0.0
+  description: |
+    Hợp đồng API giữa Core Business (Provider) và Notification Service (Consumer).
+    Đặc tả cấu trúc sự kiện thông báo (cá nhân và toàn trường) qua kiến trúc REST (mô phỏng cho Queue Async ở Lab 03).
+  contact:
+    name: Pair 04 Team
+    email: pair04@example.edu.vn
+servers:
+  - url: http://localhost:4012
+    description: Prism mock server
+  - url: https://api.campus.local
+    description: Class network placeholder
+tags:
+  - name: health
+    description: Kiểm tra trạng thái service
+  - name: notifications
+    description: Quản lý các sự kiện gửi thông báo
+  - name: users
+    description: Truy xuất thông tin người dùng
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Kiểm tra trạng thái service
+      description: Endpoint kiểm tra service còn hoạt động.
+      tags: [health]
+      security: []
+      responses:
+        '200':
+          description: Service đang hoạt động
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                ok:
+                  value:
+                    status: ok
+                    service: core-notification-provider
+                    time: '2026-05-18T08:00:00Z'
+
+  /internal/notifications:
+    post:
+      operationId: createNotificationEvent
+      summary: Gửi một sự kiện thông báo mới
+      description: |
+        Core Business gọi API này để đẩy thông báo vào hệ thống. 
+        Minh họa polymorphism: Payload có thể là UserNoticeEvent (Cá nhân) hoặc BroadcastEvent (Toàn trường).
+      tags: [notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationEvent'
+            examples:
+              userNotice:
+                value:
+                  eventType: USER_NOTICE
+                  eventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
+                  priority: HIGH
+                  timestamp: '2026-05-18T08:00:00Z'
+                  userId: SV-2026-001
+                  channelType: email
+                  templateId: TPL-TUITION-FEE
+                  scheduledAt: null
+              broadcastNotice:
+                value:
+                  eventType: BROADCAST
+                  eventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babd
+                  priority: CRITICAL
+                  timestamp: '2026-05-18T08:05:00Z'
+                  targetRole: STUDENT
+                  messageBody: Cảnh báo cháy tại nhà A3, yêu cầu sơ tán ngay.
+                  expiresAt: '2026-05-18T10:00:00Z'
+      responses:
+        '202':
+          description: Sự kiện đã được nhận và đưa vào hàng đợi xử lý (Async).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventAccepted'
+              examples:
+                accepted:
+                  value:
+                    eventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
+                    acceptedAt: '2026-05-18T08:00:01Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+
+  /internal/notifications/{eventId}/status:
+    get:
+      operationId: getNotificationStatus
+      summary: Lấy trạng thái của một thông báo
+      description: Trả về trạng thái xử lý hiện tại của một thông báo (PENDING, SENT, FAILED).
+      tags: [notifications]
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+      responses:
+        '200':
+          description: Thông tin trạng thái thông báo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationStatusInfo'
+              examples:
+                sent:
+                  value:
+                    eventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
+                    status: SENT
+                    deliveredAt: '2026-05-18T08:01:15Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /internal/users/{userId}/contact:
+    get:
+      operationId: getUserContact
+      summary: Truy xuất thông tin liên lạc
+      description: Notification Service gọi để lấy email/sđt nếu cache nội bộ không có.
+      tags: [users]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Thông tin liên lạc của User
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContact'
+              examples:
+                success:
+                  value:
+                    userId: SV-2026-001
+                    email: sv001@example.edu.vn
+                    phone: '0901234567'
+                    deviceToken: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      description: UUID của sự kiện thông báo.
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Mã sinh viên hoặc mã nhân viên.
+      schema:
+        type: string
+        pattern: '^[A-Z]{2}-[0-9]{4}-[0-9]{3}$'
+
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status, service, time]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          minLength: 2
+          maxLength: 80
+        time:
+          type: string
+          format: date-time
+
+    NotificationEvent:
+      oneOf:
+        - $ref: '#/components/schemas/UserNoticeEvent'
+        - $ref: '#/components/schemas/BroadcastEvent'
+      discriminator:
+        propertyName: eventType
+        mapping:
+          USER_NOTICE: '#/components/schemas/UserNoticeEvent'
+          BROADCAST: '#/components/schemas/BroadcastEvent'
+
+    UserNoticeEvent:
+      type: object
+      additionalProperties: false
+      required: [eventType, eventId, priority, timestamp, userId, channelType, templateId]
+      properties:
+        eventType:
+          type: string
+          const: USER_NOTICE
+        eventId:
+          type: string
+          format: uuid
+        priority:
+          type: string
+          enum: [LOW, NORMAL, HIGH, CRITICAL]
+        timestamp:
+          type: string
+          format: date-time
+        userId:
+          type: string
+          pattern: '^[A-Z]{2}-[0-9]{4}-[0-9]{3}$'
+        channelType:
+          type: string
+          enum: [email, sms, push]
+        templateId:
+          type: string
+          minLength: 3
+          maxLength: 50
+        scheduledAt:
+          type: [string, 'null']
+          format: date-time
+          description: Thời gian hẹn giờ gửi. Bằng null nếu muốn gửi ngay lập tức.
+
+    BroadcastEvent:
+      type: object
+      additionalProperties: false
+      required: [eventType, eventId, priority, timestamp, targetRole, messageBody]
+      properties:
+        eventType:
+          type: string
+          const: BROADCAST
+        eventId:
+          type: string
+          format: uuid
+        priority:
+          type: string
+          enum: [LOW, NORMAL, HIGH, CRITICAL]
+        timestamp:
+          type: string
+          format: date-time
+        targetRole:
+          type: string
+          enum: [STUDENT, LECTURER, STAFF, ALL]
+        messageBody:
+          type: string
+          minLength: 10
+          maxLength: 1000
+        expiresAt:
+          type: [string, 'null']
+          format: date-time
+
+    EventAccepted:
+      type: object
+      additionalProperties: false
+      required: [eventId, acceptedAt]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        acceptedAt:
+          type: string
+          format: date-time
+
+    NotificationStatusInfo:
+      type: object
+      additionalProperties: false
+      required: [eventId, status, deliveredAt]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, SENT, FAILED]
+        deliveredAt:
+          type: [string, 'null']
+          format: date-time
+
+    UserContact:
+      type: object
+      additionalProperties: false
+      required: [userId, email, phone, deviceToken]
+      properties:
+        userId:
+          type: string
+        email:
+          type: [string, 'null']
+          format: email
+        phone:
+          type: [string, 'null']
+          pattern: '^[0-9]{10}$'
+        deviceToken:
+          type: [string, 'null']
+
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+          minLength: 3
+          maxLength: 120
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: [string, 'null']
+          maxLength: 500
+        instance:
+          type: [string, 'null']
+          format: uri
+        errors:
+          type: array
+          minItems: 0
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [field, code, message]
+            properties:
+              field:
+                type: string
+                minLength: 1
+                maxLength: 80
+              code:
+                type: string
+                minLength: 2
+                maxLength: 80
+              message:
+                type: string
+                minLength: 3
+                maxLength: 200
+
+  responses:
+    BadRequest:
+      description: Dữ liệu sai định dạng
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://campus.local/errors/validation
+            title: Dữ liệu không hợp lệ
+            status: 400
+            detail: Payload thiếu trường eventId
+            instance: /internal/notifications
+            errors: []
+
+    Unauthorized:
+      description: Thiếu hoặc sai thông tin xác thực
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://campus.local/errors/unauthorized
+            title: Chưa xác thực
+            status: 401
+            detail: Thiếu Bearer token nội bộ
+            instance: /internal/notifications
+            errors: []
+
+    NotFound:
+      description: Resource không tồn tại
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://campus.local/errors/not-found
+            title: Không tìm thấy
+            status: 404
+            detail: UUID của sự kiện không tồn tại.
+            instance: /internal/notifications/0196fb3d-4ad7-7d1e-9f49-5d5148d2babc/status
+            errors: []
+
+    UnprocessableEntity:
+      description: Payload đúng JSON nhưng không hợp lệ về nghiệp vụ
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://campus.local/errors/business-rule
+            title: Vi phạm quy tắc nghiệp vụ
+            status: 422
+            detail: scheduledAt không được là thời gian trong quá khứ.
+            instance: /internal/notifications
+            errors: []
